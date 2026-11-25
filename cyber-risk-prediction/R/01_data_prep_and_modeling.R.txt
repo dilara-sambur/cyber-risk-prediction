@@ -1,0 +1,165 @@
+############################################################
+# VERİ MADENCİLİĞİ DERSİ – FINAL PROJE
+# Konu: Siber saldırılarda finansal etki ve risk seviyesi analizi
+# Modeller: C4.5 (J48), Naive Bayes
+############################################################
+
+############################
+# 1. GEREKLİ PAKETLER
+############################ 
+library(caret)
+library(e1071)
+library(RWeka)
+
+############################
+# 2. VERİYİ OKUMA
+############################
+veri <- read.csv(file.choose(), header = TRUE, sep = ",", dec = ".")
+
+str(veri)    # Veri setinin yapisini inceleme
+
+summary(veri)  # Veri setinin özet istatistiklerini görüntüleme
+
+#Eksik veri kontrolü
+anyNA(veri)
+colSums(is.na(veri))   #Desiken bazli eksik veri kontrolu
+
+
+############################
+# 3. TÜRKÇE SÜTUN İSİMLERİ
+############################
+colnames(veri) <- c("ulke","yil","saldiri_turu","hedef_sektor",
+                    "finansal_kayip_musd","etkilenen_kullanici",
+                    "saldiri_kaynagi","zafiyet_turu",
+                    "savunma_mekanizmasi","cozum_suresi_saat")
+
+############################
+# 4. KATEGORİK DEGİŞKENLER
+############################
+veri$ulke <- as.factor(veri$ulke)
+veri$saldiri_turu <- as.factor(veri$saldiri_turu)
+veri$hedef_sektor <- as.factor(veri$hedef_sektor)
+veri$saldiri_kaynagi <- as.factor(veri$saldiri_kaynagi)
+veri$zafiyet_turu <- as.factor(veri$zafiyet_turu)
+veri$savunma_mekanizmasi <- as.factor(veri$savunma_mekanizmasi)
+str(veri)
+
+#Sayısal değişkenlerin özet istatistikleri
+summary(veri$finansal_kayip_musd)
+summary(veri$etkilenen_kullanici)
+summary(veri$cozum_suresi_saat)
+
+boxplot(veri$finansal_kayip_musd, main="Finansal Kayip Dagilimi")
+boxplot(veri$etkilenen_kullanici, main="Etkilenen Kullanici Sayisi Dagilimi")
+boxplot(veri$cozum_suresi_saat, main="cozum Suresi Dagilimi")
+
+
+
+
+############################################################
+# HEDEF–1: FİNANSAL ETKİ 
+############################################################
+
+# Finansal etki medyan temelli ikili sınıf
+medyan_kayip <- median(veri$finansal_kayip_musd)
+
+veri$finansal_etki <- ifelse(
+  veri$finansal_kayip_musd > medyan_kayip,
+  "yuksek",
+  "dusuk"
+)
+veri$finansal_etki <- as.factor(veri$finansal_etki)
+table(veri$finansal_etki)
+
+
+
+
+# Etiket sızıntısını önlemek için finansal_kayip_musd modele dahil etmedik
+veri_fe <- veri[, c(
+  "finansal_etki",
+  "yil","ulke","saldiri_turu","hedef_sektor",
+  "saldiri_kaynagi","zafiyet_turu","savunma_mekanizmasi",
+  "etkilenen_kullanici","cozum_suresi_saat"
+)]
+names(veri_fe)
+
+# Eğitim–Test Ayırma
+set.seed(1)
+ind_fe <- createDataPartition(veri_fe$finansal_etki, p = 0.70, list = FALSE)
+egitim_fe <- veri_fe[ind_fe, ]
+test_fe <- veri_fe[-ind_fe, ]
+
+# J48
+j48_fe <- J48(finansal_etki ~ ., data = egitim_fe)
+
+
+tahmin_j48_fe <- predict(j48_fe, test_fe)
+confusionMatrix(tahmin_j48_fe, test_fe$finansal_etki)
+
+# Naive Bayes
+nb_fe <- naiveBayes(egitim_fe[, -1], egitim_fe$finansal_etki)
+tahmin_nb_fe <- predict(nb_fe, test_fe[, -1])
+confusionMatrix(tahmin_nb_fe, test_fe$finansal_etki)
+
+############################################################
+# HEDEF–2: RİSK SEVİYESİ (BAŞARILI)
+############################################################
+
+# Min-Max normalizasyon
+kayip_n <- (veri$finansal_kayip_musd - min(veri$finansal_kayip_musd)) /
+  (max(veri$finansal_kayip_musd) - min(veri$finansal_kayip_musd))
+
+kullanici_n <- (veri$etkilenen_kullanici - min(veri$etkilenen_kullanici)) /
+  (max(veri$etkilenen_kullanici) - min(veri$etkilenen_kullanici))
+
+sure_n <- (veri$cozum_suresi_saat - min(veri$cozum_suresi_saat)) /
+  (max(veri$cozum_suresi_saat) - min(veri$cozum_suresi_saat))
+
+#normalizasyonu veri setine sütun olarak ekleyelim
+veri$finansal_kayip_norm <- kayip_n
+veri$etkilenen_kullanici_norm <- kullanici_n
+veri$cozum_suresi_norm <- sure_n
+
+str(veri)
+
+# Eşit ağırlıklı risk skoru
+veri$risk_skoru <- (kayip_n + kullanici_n + sure_n) / 3
+summary(veri$risk_skoru)
+
+# Eşit frekanslı sınıflandırma
+q <- quantile(veri$risk_skoru, probs = c(0.33, 0.66))
+
+veri$risk_seviyesi <- cut(
+  veri$risk_skoru,
+  breaks = c(-Inf, q[1], q[2], Inf),
+  labels = c("dusuk", "orta", "yuksek")
+)
+veri$risk_seviyesi <- as.factor(veri$risk_seviyesi)
+table(veri$risk_seviyesi)
+# Risk veri seti
+veri_risk <- veri[, c(
+  "risk_seviyesi",
+  "finansal_kayip_musd",
+  "etkilenen_kullanici",
+  "cozum_suresi_saat"
+)]
+
+# Eğitim–Test Ayırma
+set.seed(1)
+ind_risk <- createDataPartition(veri_risk$risk_seviyesi, p = 0.70, list = FALSE)
+egitim_risk <- veri_risk[ind_risk, ]
+test_risk <- veri_risk[-ind_risk, ]
+
+# J48 – Risk
+j48_risk <- J48(risk_seviyesi ~ ., data = egitim_risk)
+tahmin_j48_risk <- predict(j48_risk, test_risk)
+confusionMatrix(tahmin_j48_risk, test_risk$risk_seviyesi)
+
+# Naive Bayes – Risk
+nb_risk <- naiveBayes(egitim_risk[, -1], egitim_risk$risk_seviyesi)
+tahmin_nb_risk <- predict(nb_risk, test_risk[, -1])
+confusionMatrix(tahmin_nb_risk, test_risk$risk_seviyesi)
+
+############################################################
+############################################################    
+
